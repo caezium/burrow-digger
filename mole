@@ -309,7 +309,7 @@ show_version() {
     local channel
     channel=$(get_install_channel)
 
-    printf '\nMole version %s\n' "$VERSION"
+    printf '\nburrow-engine version %s (fork of mole @ 9daf936, last MIT)\n' "$VERSION"
     if [[ "$channel" == "nightly" ]]; then
         local commit
         commit=$(get_install_commit)
