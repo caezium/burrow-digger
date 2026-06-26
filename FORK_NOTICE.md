@@ -24,9 +24,16 @@ Every commit after `9daf936` is GPL-3.0 and incompatible with downstream commerc
 use. There is intentionally **no upstream git remote**. New work is authored here or
 clean-roomed — never copied from GPL upstream.
 
+## Clean-room additions (post-V1.42 features reimplemented, NOT copied from GPL upstream)
+
+- **`status --watch` (NDJSON streaming)** — 2026-06-26. Contract learned from mo's V1.44
+  *release notes* ("newline-delimited JSON status streaming"), implemented fresh in
+  `cmd/status/main.go` (`runWatchMode`) around the engine's existing V1.42 collector. No mo
+  V1.43+ (GPL) source was read or copied. Backward-compatible: one-shot `status --json` is
+  unchanged; `--watch` adds a loop emitting one compact JSON object per line until interrupted.
+
 ## TODO before shipping
 
-- [ ] Rename the product/command surface away from "Mole"/"mo" (upstream added a trademark
-      policy — do not ship under the upstream name). Target: `burrow-engine`.
-- [ ] Clean-room any desired post-V1.42 features (Windows `--json`, new cache paths).
+- [x] Rename product/command surface away from "Mole"/"mo" (identity string + Go module done).
+- [ ] Clean-room remaining desired post-V1.42 features as needed (new cache paths, etc.).
 - [ ] Wire as the cleaning engine behind `burrow-cli`; repoint Burrow GUI installer here.

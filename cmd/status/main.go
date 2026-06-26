@@ -6,8 +6,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -26,6 +28,8 @@ var (
 	procCPUThreshold = flag.Float64("proc-cpu-threshold", 100, "alert when a process stays above this CPU percent")
 	procCPUWindow    = flag.Duration("proc-cpu-window", 5*time.Minute, "continuous duration a process must exceed the CPU threshold")
 	procCPUAlerts    = flag.Bool("proc-cpu-alerts", true, "enable persistent high-CPU process alerts")
+	watchOutput      = flag.Bool("watch", false, "stream metrics as newline-delimited JSON (NDJSON) until interrupted")
+	watchInterval    = flag.Duration("watch-interval", refreshInterval, "interval between NDJSON snapshots in --watch mode")
 )
 
 func shouldUseJSONOutput(forceJSON bool, stdout *os.File) bool {
@@ -323,6 +327,40 @@ func runJSONMode() {
 	}
 }
 
+// runWatchMode streams metrics as newline-delimited JSON (one compact object per line) at
+// watchInterval until SIGINT/SIGTERM or the consumer closes the pipe. The collector is reused
+// across ticks so process-CPU windowing accumulates state, like the TUI does.
+func runWatchMode() {
+	interval := *watchInterval
+	if interval <= 0 {
+		interval = refreshInterval
+	}
+	collector := NewCollector(processWatchOptionsFromFlags())
+	// No SetIndent => compact; Encode appends '\n' after each object => NDJSON. os.Stdout is
+	// unbuffered, so every snapshot is flushed as it's produced.
+	encoder := json.NewEncoder(os.Stdout)
+
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		if data, err := collector.Collect(); err != nil {
+			fmt.Fprintf(os.Stderr, "error collecting metrics: %v\n", err)
+			// keep streaming — a transient collect error shouldn't kill the feed
+		} else if encErr := encoder.Encode(data); encErr != nil {
+			return // consumer closed the pipe (broken pipe) — stop quietly
+		}
+		select {
+		case <-sigs:
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
 // runTUIMode runs the interactive terminal UI.
 func runTUIMode() {
 	p := tea.NewProgram(newModel(), tea.WithAltScreen())
@@ -339,6 +377,10 @@ func main() {
 		os.Exit(2)
 	}
 
+	if *watchOutput {
+		runWatchMode()
+		return
+	}
 	if shouldUseJSONOutput(*jsonOutput, os.Stdout) {
 		runJSONMode()
 	} else {
