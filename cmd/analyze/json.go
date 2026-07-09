@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"sync"
@@ -38,8 +39,21 @@ type jsonFileEntry struct {
 }
 
 func runJSONMode(path string, isOverview bool) {
-	result := performScanForJSON(path, isOverview)
+	// --progress: stream NDJSON scan-progress events on stdout during the scan,
+	// then a terminating `result` event — so a GUI renders the treemap live.
+	// (Overview mode keeps the plain batch output.)
+	if *progressMode && !isOverview {
+		result := performDirectoryScanForJSONWithProgress(path, os.Stdout, 200*time.Millisecond)
+		line, err := resultEvent(result)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to encode result: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println(string(line))
+		return
+	}
 
+	result := performScanForJSON(path, isOverview)
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(result); err != nil {
@@ -56,11 +70,46 @@ func performScanForJSON(path string, isOverview bool) jsonOutput {
 }
 
 func performDirectoryScanForJSON(path string) jsonOutput {
+	return performDirectoryScanForJSONWithProgress(path, nil, 0)
+}
+
+// performDirectoryScanForJSONWithProgress runs the concurrent scan and, when
+// progress != nil, streams NDJSON progress events (read from the atomic scan
+// counters every interval) to it until the scan completes — the engine half of
+// the progressive-analyze slice, mirroring `status --watch`. progress == nil is
+// the plain batch path.
+func performDirectoryScanForJSONWithProgress(path string, progress io.Writer, interval time.Duration) jsonOutput {
 	var filesScanned, dirsScanned, bytesScanned int64
 	currentPath := &atomic.Value{}
 	currentPath.Store("")
 
+	var stop chan struct{}
+	if progress != nil {
+		stop = make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-stop:
+					return
+				case <-ticker.C:
+					cur, _ := currentPath.Load().(string)
+					_, _ = progress.Write(append(progressEvent(
+						atomic.LoadInt64(&filesScanned),
+						atomic.LoadInt64(&dirsScanned),
+						atomic.LoadInt64(&bytesScanned),
+						cur,
+					), '\n'))
+				}
+			}
+		}()
+	}
+
 	result, err := scanPathConcurrentAllEntries(path, &filesScanned, &dirsScanned, &bytesScanned, currentPath)
+	if stop != nil {
+		close(stop)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to scan directory: %v\n", err)
 		os.Exit(1)
