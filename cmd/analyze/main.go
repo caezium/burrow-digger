@@ -17,7 +17,8 @@ import (
 )
 
 var (
-	jsonMode = flag.Bool("json", false, "output analysis as JSON instead of TUI")
+	jsonMode     = flag.Bool("json", false, "output analysis as JSON instead of TUI")
+	progressMode = flag.Bool("progress", false, "with --json: stream NDJSON scan-progress events, then a final result event")
 )
 
 func main() {
