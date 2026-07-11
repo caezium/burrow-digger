@@ -79,13 +79,17 @@ request_sudo_access() {
         return 0
     fi
 
-    # Detect if running in TTY environment
+    # Detect if running in TTY environment. Permission tests ([[ -r/-w /dev/tty ]]) are NOT
+    # enough: /dev/tty is rw-by-mode for everyone, but OPENING it fails (ENXIO) when the
+    # process has no controlling terminal — exactly a GUI-launched run. That mis-detection
+    # sent GUI uninstalls down terminal sudo, which died with "Admin access denied" instead
+    # of showing the osascript password dialog (Burrow #253). So: actually try to open it.
     local tty_path="/dev/tty"
     local is_gui_mode=false
 
-    if [[ ! -r "$tty_path" || ! -w "$tty_path" ]]; then
+    if ! { : < "$tty_path"; } 2> /dev/null; then
         tty_path=$(tty 2> /dev/null || echo "")
-        if [[ -z "$tty_path" || ! -r "$tty_path" || ! -w "$tty_path" ]]; then
+        if [[ -z "$tty_path" ]] || ! { : < "$tty_path"; } 2> /dev/null; then
             is_gui_mode=true
         fi
     fi
