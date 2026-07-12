@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/caezium/burrow-engine/internal/units"
+	"github.com/caezium/burrow-digger/internal/units"
 )
 
 func displayPath(path string) string {
