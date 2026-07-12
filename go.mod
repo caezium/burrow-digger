@@ -1,4 +1,4 @@
-module github.com/caezium/burrow-engine
+module github.com/caezium/burrow-digger
 
 go 1.25.0
 

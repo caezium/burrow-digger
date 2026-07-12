@@ -7,7 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/caezium/burrow-engine/internal/units"
+	"github.com/caezium/burrow-digger/internal/units"
 )
 
 var (
