@@ -14,18 +14,41 @@ import (
 )
 
 const (
-	cpuSampleInterval = 100 * time.Millisecond
+	// minCPUSampleWindow is the shortest tick window we will report a percentage
+	// from. macOS credits the per-CPU tick counters behind host_processor_info at
+	// kern.clockrate hz (100), so a 100ms window only accrues ~10 ticks per core
+	// and every per-core reading collapses onto a multiple of ~1/10 — the coarse
+	// 0 / 9.09 / 55.56 / 66.67 values from Burrow #335. 600ms gives ~60 ticks per
+	// core, which puts per-core quantization under 2 points.
+	minCPUSampleWindow = 600 * time.Millisecond
+	// maxCPUSampleWindow bounds how stale a cached baseline may be. Past this the
+	// delta describes a long-gone average rather than "now", so we resample.
+	maxCPUSampleWindow = 5 * time.Minute
 )
 
-func collectCPU() (CPUStatus, error) {
-	return collectCPUWithOptions(true)
+// cpuTimesFunc is indirected so tests can drive the sampler with synthetic ticks.
+var cpuTimesFunc = cpu.Times
+
+// primeCPUCounters takes the first tick baseline, at construction, so the window
+// a one-shot run has to wait out is as short as possible.
+func (c *Collector) primeCPUCounters(now time.Time) {
+	times, err := cpuTimesFunc(true)
+	if err != nil || len(times) == 0 {
+		return
+	}
+	c.prevCPUTimes = times
+	c.lastCPUAt = now
 }
 
-func collectCPUFast() (CPUStatus, error) {
-	return collectCPUWithOptions(false)
+func (c *Collector) collectCPU(now time.Time) (CPUStatus, error) {
+	return c.collectCPUWithOptions(now, true)
 }
 
-func collectCPUWithOptions(includeSlowFallbacks bool) (CPUStatus, error) {
+func (c *Collector) collectCPUFast(now time.Time) (CPUStatus, error) {
+	return c.collectCPUWithOptions(now, false)
+}
+
+func (c *Collector) collectCPUWithOptions(now time.Time, includeSlowFallbacks bool) (CPUStatus, error) {
 	counts, countsErr := cpu.Counts(false)
 	if countsErr != nil || counts == 0 {
 		counts = runtime.NumCPU()
@@ -39,18 +62,13 @@ func collectCPUWithOptions(includeSlowFallbacks bool) (CPUStatus, error) {
 		logical = 1
 	}
 
-	if includeSlowFallbacks {
-		// Two-call pattern for more reliable CPU usage on the full refresh path.
-		warmUpCPU()
-		time.Sleep(cpuSampleInterval)
-	}
-	percents, err := cpu.Percent(0, true)
-	var totalPercent float64
+	totalPercent, percents, err := c.cpuUsageSinceBaseline(now, includeSlowFallbacks)
 	perCoreEstimated := false
 	if err != nil || len(percents) == 0 {
 		if !includeSlowFallbacks {
-			// Fast path: skip the expensive secondary sampling and just
-			// estimate zeroed per-core usage. The next full refresh corrects it.
+			// Fast path: never block for a fresh window. Report zeroed per-core
+			// usage and let the next refresh, which has a real baseline, correct it.
+			totalPercent = 0
 			percents = make([]float64, logical)
 			perCoreEstimated = true
 		} else {
@@ -65,11 +83,6 @@ func collectCPUWithOptions(includeSlowFallbacks bool) (CPUStatus, error) {
 			percents = fallbackPerCore
 			perCoreEstimated = true
 		}
-	} else {
-		for _, v := range percents {
-			totalPercent += v
-		}
-		totalPercent /= float64(len(percents))
 	}
 
 	loadStats, loadErr := load.Avg()
@@ -276,6 +289,124 @@ func fallbackCPUUtilization(logical int) (float64, []float64, error) {
 	return avg, perCore, nil
 }
 
-func warmUpCPU() {
-	cpu.Percent(0, true) //nolint:errcheck
+// cpuUsageSinceBaseline turns the collector's cached tick baseline and a fresh
+// reading into a total plus per-core percentages.
+//
+// Reusing the baseline across refreshes is what makes the number trustworthy: in
+// `--watch` and the TUI the window becomes the whole refresh interval, and in a
+// one-shot run it spans the entire collection pass. Both are wide enough to
+// accrue hundreds of ticks per core, so the reading stops jumping and stops
+// being dominated by whatever the collector itself was doing.
+//
+// mayBlock allows the slow path to sleep out the remainder of the minimum window
+// when the baseline is too young to divide by; the fast path never blocks.
+func (c *Collector) cpuUsageSinceBaseline(now time.Time, mayBlock bool) (float64, []float64, error) {
+	cur, err := cpuTimesFunc(true)
+	if err != nil {
+		return 0, nil, err
+	}
+	if len(cur) == 0 {
+		return 0, nil, errors.New("no per-cpu times available")
+	}
+
+	baseline := c.prevCPUTimes
+	elapsed := now.Sub(c.lastCPUAt)
+	haveBaseline := !c.lastCPUAt.IsZero() && len(baseline) == len(cur) && elapsed > 0
+
+	switch {
+	case haveBaseline && elapsed >= minCPUSampleWindow && elapsed <= maxCPUSampleWindow:
+		// The common path: the previous refresh left a baseline wide enough to use.
+	case !mayBlock:
+		// Fast path with a young or missing baseline. A sub-window delta is still a
+		// real measurement (just noisier), so report it rather than blocking; only
+		// a wholly missing baseline gives up and lets the caller zero the reading.
+		if !haveBaseline {
+			c.prevCPUTimes, c.lastCPUAt = cur, now
+			return 0, nil, errors.New("cpu baseline not ready")
+		}
+	default:
+		// Slow path: sleep out whatever the window is still short by. A baseline
+		// that is merely young is extended rather than discarded, so we sleep the
+		// remainder instead of a full window.
+		wait := minCPUSampleWindow
+		if haveBaseline && elapsed < minCPUSampleWindow {
+			wait = minCPUSampleWindow - elapsed
+		} else {
+			baseline = cur
+		}
+		time.Sleep(wait)
+		fresh, freshErr := cpuTimesFunc(true)
+		if freshErr != nil {
+			return 0, nil, freshErr
+		}
+		if len(fresh) != len(baseline) {
+			return 0, nil, errors.New("cpu core count changed mid-sample")
+		}
+		cur, now = fresh, time.Now()
+	}
+
+	total, perCore, ticks := cpuPercentFromTimes(baseline, cur)
+	c.prevCPUTimes, c.lastCPUAt = cur, now
+	if ticks <= 0 {
+		// The window closed before the counters advanced (a fast-path refresh that
+		// landed almost on top of the baseline). Reporting 0% would read as "idle";
+		// let the caller mark the reading unavailable instead.
+		return 0, nil, errors.New("cpu sample window accrued no ticks")
+	}
+	return total, perCore, nil
+}
+
+// cpuPercentFromTimes converts two per-CPU tick snapshots into per-core busy
+// percentages and a total.
+//
+// The total is derived from summed tick deltas rather than by averaging the
+// per-core percentages. Cores don't all report the same number of ticks in a
+// window — a core that was parked may contribute only one or two — and an
+// unweighted mean lets those thin samples swing the total as hard as a fully
+// sampled core. Summing first weights every core by the time it actually
+// accounted for.
+// It also returns the total tick delta the window accrued, so callers can tell a
+// genuinely idle machine from a window that closed too early to measure anything.
+func cpuPercentFromTimes(prev, cur []cpu.TimesStat) (total float64, perCore []float64, ticks float64) {
+	perCore = make([]float64, len(cur))
+	var totalBusy float64
+	for i := range cur {
+		busy, all := cpuBusyTotal(prev[i], cur[i])
+		if all > 0 {
+			perCore[i] = clampPercent(busy / all * 100)
+		}
+		totalBusy += busy
+		ticks += all
+	}
+	if ticks <= 0 {
+		return 0, perCore, 0
+	}
+	return clampPercent(totalBusy / ticks * 100), perCore, ticks
+}
+
+// cpuBusyTotal returns the busy and total tick deltas between two samples of one
+// CPU. Deltas are floored at zero so a counter reset can't produce a negative.
+func cpuBusyTotal(prev, cur cpu.TimesStat) (busy, total float64) {
+	delta := func(a, b float64) float64 {
+		if d := b - a; d > 0 {
+			return d
+		}
+		return 0
+	}
+	idle := delta(prev.Idle, cur.Idle)
+	busy = delta(prev.User, cur.User) + delta(prev.System, cur.System) +
+		delta(prev.Nice, cur.Nice) + delta(prev.Iowait, cur.Iowait) +
+		delta(prev.Irq, cur.Irq) + delta(prev.Softirq, cur.Softirq) +
+		delta(prev.Steal, cur.Steal)
+	return busy, busy + idle
+}
+
+func clampPercent(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 100 {
+		return 100
+	}
+	return v
 }
