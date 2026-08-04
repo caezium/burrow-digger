@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/host"
 	"github.com/shirou/gopsutil/v4/net"
@@ -231,6 +232,8 @@ type Collector struct {
 	cachedGPUUsage float64
 	prevDiskIO     disk.IOCountersStat
 	lastDiskAt     time.Time
+	prevCPUTimes   []cpu.TimesStat
+	lastCPUAt      time.Time
 
 	watchMu        sync.Mutex
 	processWatch   ProcessWatchConfig
@@ -288,7 +291,9 @@ func NewCollector(options ProcessWatchOptions) *Collector {
 		processWatch:   options.SnapshotConfig(),
 		processWatcher: NewProcessWatcher(options),
 	}
-	c.primeNetworkCounters(time.Now())
+	now := time.Now()
+	c.primeNetworkCounters(now)
+	c.primeCPUCounters(now)
 	return c
 }
 
@@ -351,7 +356,6 @@ func (c *Collector) collectFast(includeProcesses bool) (MetricsSnapshot, error) 
 	var collected collectedMetrics
 
 	tasks := []func() error{
-		func() (err error) { collected.cpuStats, err = collectCPUFast(); return },
 		func() (err error) { collected.memStats, err = collectMemoryFast(); return },
 		func() (err error) { collected.diskStats, err = collectDisksFast(); return },
 		func() (err error) { collected.diskIO = c.collectDiskIO(now); return nil },
@@ -361,7 +365,8 @@ func (c *Collector) collectFast(includeProcesses bool) (MetricsSnapshot, error) 
 		tasks = append(tasks, func() error { return collectProcessesInto(&collected) })
 	}
 
-	mergeErr := collectConcurrently(tasks...)
+	mergeErr := c.collectCPUInto(&collected, false, nil)
+	mergeErr = mergeCollectErr(mergeErr, collectConcurrently(tasks...))
 
 	snapshot := c.snapshotFromMetrics(now, hostInfo, collected, false)
 	c.applyEnrichment(&snapshot, collected.hasProcesses)
@@ -379,7 +384,6 @@ func (c *Collector) collectFull() (MetricsSnapshot, error) {
 
 	// Launch independent collection tasks.
 	tasks := []func() error{
-		func() (err error) { collected.cpuStats, err = collectCPU(); return },
 		func() (err error) { collected.memStats, err = collectMemory(); return },
 		func() (err error) { collected.diskStats, err = collectDisks(); return },
 		func() (err error) { collected.trashSize, collected.trashApprox = collectTrashSize(); return nil },
@@ -404,13 +408,50 @@ func (c *Collector) collectFull() (MetricsSnapshot, error) {
 		},
 		func() error { return collectProcessesInto(&collected) },
 	}
-	mergeErr := collectConcurrently(tasks...)
+	mergeErr := c.collectCPUInto(&collected, true, nil)
+	mergeErr = mergeCollectErr(mergeErr, collectConcurrently(tasks...))
 
 	snapshot := c.snapshotFromMetrics(now, hostInfo, collected, true)
 	if mergeErr == nil {
 		c.cacheEnrichment(snapshot)
 	}
 	return snapshot, mergeErr
+}
+
+// collectCPUInto samples CPU before the rest of the pass runs, and folds any
+// error into the collection's merged error.
+//
+// The ordering is deliberate. CPU is the one metric measured as a delta over a
+// window rather than read as an instantaneous value, so sampling it alongside
+// the other collectors put its window over exactly the burst where they fan out
+// to system_profiler, ioreg and ps — the collector spent its window watching
+// itself, and reported roughly double what the machine was doing at rest
+// (Burrow #335). Closing the window before the pass starts means a long-lived
+// collector measures the interval between passes, and a one-shot run measures a
+// quiet window instead of its own spike.
+func (c *Collector) collectCPUInto(collected *collectedMetrics, includeSlowFallbacks bool, mergeErr error) error {
+	var (
+		stats CPUStatus
+		err   error
+	)
+	if includeSlowFallbacks {
+		stats, err = c.collectCPU(time.Now())
+	} else {
+		stats, err = c.collectCPUFast(time.Now())
+	}
+	collected.cpuStats = stats
+	return mergeCollectErr(mergeErr, err)
+}
+
+func mergeCollectErr(merged, err error) error {
+	switch {
+	case err == nil:
+		return merged
+	case merged == nil:
+		return err
+	default:
+		return fmt.Errorf("%v; %w", merged, err)
+	}
 }
 
 func collectProcessesInto(collected *collectedMetrics) error {
