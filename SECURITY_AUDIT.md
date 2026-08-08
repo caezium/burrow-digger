@@ -250,7 +250,8 @@ Mole exposes multiple safety controls before and during destructive actions:
 - purge marks recent projects conservatively and leaves them unselected by default
 - purge configuration is written atomically (mktemp then rename) to prevent partial writes if the process is interrupted
 - analyzer delete uses Finder Trash rather than direct permanent removal
-- operation logs are written to `~/Library/Logs/mole/operations.log` unless disabled with `MO_NO_OPLOG=1`
+- operation logs are written beneath the canonical, invoking-user-owned `~/Library/Logs/mole` root unless disabled with `MO_NO_OPLOG=1`; `MOLE_OPLOG_PATH` is the only override and must name a direct, real directory on the home volume under `~/Library/Logs`
+- malformed or legacy operation-log roots can be listed with the read-only `scripts/audit_operation_log_roots.sh`; `--null` provides NUL-delimited diagnostic records and the tool never deletes inventory entries
 - `mole_delete` Trash and permanent deletion attempts are also recorded by the file-operation layer with result status, target path, and error context where available
 - `mo history` (`lib/core/history.sh`) is read-only: it reads `operations.log` and `deletions.log` to surface recent cleanup activity and performs no deletion or out-of-bounds writes
 - timeouts bound external commands so stalled discovery or uninstall operations do not silently hang the entire flow

@@ -12,9 +12,13 @@ setup_file() {
 setup() {
     SANDBOX="$(mktemp -d "${BATS_TEST_DIRNAME}/tmp-mole-delete.XXXXXX")"
     export SANDBOX
-    export MOLE_DELETE_LOG="$SANDBOX/deletions.log"
+    HOME="$SANDBOX/home"
+    export HOME
+    export MOLE_OPLOG_PATH="$HOME/Library/Logs/mole-test"
+    export TEST_DELETE_LOG="$MOLE_OPLOG_PATH/deletions.log"
     export MOLE_TEST_TRASH_DIR="$SANDBOX/Trash"
     export MOLE_TEST_NO_AUTH=1
+    mkdir -p "$HOME/Library/Logs"
     unset MOLE_DELETE_MODE
     unset MOLE_DRY_RUN
 }
@@ -26,7 +30,8 @@ teardown() {
 prelude() {
     cat <<EOF
 set -euo pipefail
-export MOLE_DELETE_LOG="$MOLE_DELETE_LOG"
+export HOME="$HOME"
+export MOLE_OPLOG_PATH="$MOLE_OPLOG_PATH"
 export MOLE_TEST_TRASH_DIR="$MOLE_TEST_TRASH_DIR"
 export MOLE_TEST_NO_AUTH=1
 source "$PROJECT_ROOT/lib/core/common.sh"
@@ -116,7 +121,7 @@ EOF
     [[ "$(grep -c '^osascript ' "$trace" 2> /dev/null || true)" -eq 0 ]]
 
     local status_col
-    status_col=$(awk -F'\t' 'END { print $4 }' "$MOLE_DELETE_LOG")
+    status_col=$(awk -F'\t' 'END { print $4 }' "$TEST_DELETE_LOG")
     [ "$status_col" = "ok" ]
 }
 
@@ -158,7 +163,7 @@ EOF
     [[ "$(grep -c '^sudo -n mv ' "$trace" 2> /dev/null || true)" -eq 0 ]]
 
     local status_col
-    status_col=$(awk -F'\t' 'END { print $4 }' "$MOLE_DELETE_LOG")
+    status_col=$(awk -F'\t' 'END { print $4 }' "$TEST_DELETE_LOG")
     [ "$status_col" = "trash-failed" ]
 }
 
@@ -200,7 +205,7 @@ EOF
     [[ "$(grep -c '^sudo -n mv -n ' "$trace" 2> /dev/null || true)" -eq 1 ]]
 
     local status_col
-    status_col=$(awk -F'\t' 'END { print $4 }' "$MOLE_DELETE_LOG")
+    status_col=$(awk -F'\t' 'END { print $4 }' "$TEST_DELETE_LOG")
     [ "$status_col" = "ok" ]
 }
 
@@ -214,16 +219,16 @@ mole_delete "$victim"
 EOF
 
     [ "$status" -eq 0 ]
-    [[ -s "$MOLE_DELETE_LOG" ]]
+    [[ -s "$TEST_DELETE_LOG" ]]
 
     # Expect 5 tab-separated fields: timestamp, mode, size_kb, status, path.
     local fields
-    fields=$(awk -F'\t' 'END { print NF }' "$MOLE_DELETE_LOG")
+    fields=$(awk -F'\t' 'END { print NF }' "$TEST_DELETE_LOG")
     [ "$fields" -eq 5 ]
 
     # Status column must be "ok" for a successful permanent delete.
     local status_col
-    status_col=$(awk -F'\t' 'END { print $4 }' "$MOLE_DELETE_LOG")
+    status_col=$(awk -F'\t' 'END { print $4 }' "$TEST_DELETE_LOG")
     [ "$status_col" = "ok" ]
 }
 
@@ -240,7 +245,7 @@ EOF
     [[ -L "$victim" ]]
 
     local status_col
-    status_col=$(awk -F'\t' 'END { print $4 }' "$MOLE_DELETE_LOG")
+    status_col=$(awk -F'\t' 'END { print $4 }' "$TEST_DELETE_LOG")
     [ "$status_col" = "rejected" ]
 }
 
@@ -258,7 +263,7 @@ EOF
     [[ -e "$victim" ]]
 
     local status_col
-    status_col=$(awk -F'\t' 'END { print $4 }' "$MOLE_DELETE_LOG")
+    status_col=$(awk -F'\t' 'END { print $4 }' "$TEST_DELETE_LOG")
     [ "$status_col" = "dry-run" ]
 }
 
@@ -271,10 +276,10 @@ EOF
     [ "$status" -ne 0 ]
     # Rejection IS logged (security-relevant), with status="rejected" and size=0.
     # Audit trails need to distinguish refused-by-policy from never-attempted.
-    [[ -s "$MOLE_DELETE_LOG" ]]
+    [[ -s "$TEST_DELETE_LOG" ]]
     local status_col size_col
-    status_col=$(awk -F'\t' 'END { print $4 }' "$MOLE_DELETE_LOG")
-    size_col=$(awk -F'\t' 'END { print $3 }' "$MOLE_DELETE_LOG")
+    status_col=$(awk -F'\t' 'END { print $4 }' "$TEST_DELETE_LOG")
+    size_col=$(awk -F'\t' 'END { print $3 }' "$TEST_DELETE_LOG")
     [ "$status_col" = "rejected" ]
     [ "$size_col" = "0" ]
 }
@@ -286,7 +291,7 @@ mole_delete "$SANDBOX/does-not-exist"
 EOF
 
     [ "$status" -eq 0 ]
-    [[ ! -s "$MOLE_DELETE_LOG" ]]
+    [[ ! -s "$TEST_DELETE_LOG" ]]
 }
 
 @test "mole_delete rejects unknown delete mode without touching target" {
@@ -303,8 +308,8 @@ EOF
     [[ -e "$victim" ]]
 
     local mode_col status_col
-    mode_col=$(awk -F'\t' 'END { print $2 }' "$MOLE_DELETE_LOG")
-    status_col=$(awk -F'\t' 'END { print $4 }' "$MOLE_DELETE_LOG")
+    mode_col=$(awk -F'\t' 'END { print $2 }' "$TEST_DELETE_LOG")
+    status_col=$(awk -F'\t' 'END { print $4 }' "$TEST_DELETE_LOG")
     [ "$mode_col" = "surprise" ]
     [ "$status_col" = "invalid-mode" ]
     [[ "$output" == *'expected "permanent" or "trash"'* ]]
@@ -357,7 +362,7 @@ EOF
     [[ -e "$victim" ]]
 
     local status_col
-    status_col=$(awk -F'\t' 'END { print $4 }' "$MOLE_DELETE_LOG")
+    status_col=$(awk -F'\t' 'END { print $4 }' "$TEST_DELETE_LOG")
     [ "$status_col" = "trash-failed" ]
     [[ "$output" == *"refusing permanent delete"* ]]
 }
@@ -409,30 +414,31 @@ EOF
     [ "$status" -eq 0 ]
     [[ ! -e "$victim" ]]
     local size_col
-    size_col=$(awk -F'\t' 'END { print $3 }' "$MOLE_DELETE_LOG")
+    size_col=$(awk -F'\t' 'END { print $3 }' "$TEST_DELETE_LOG")
     [ "$size_col" = "unknown" ]
 }
 
 @test "mole_delete warns once per session when audit log is unwritable" {
     local victim="$SANDBOX/log_blocked"
     : > "$victim"
-    local broken_log_dir="$SANDBOX/no_write/logs"
-    mkdir -p "$(dirname "$broken_log_dir")"
-    chmod 0555 "$(dirname "$broken_log_dir")"
+    local broken_log_dir="$HOME/Library/Logs/broken"
+    mkdir -m 0700 "$broken_log_dir"
 
     run bash --noprofile --norc <<EOF
 set -euo pipefail
-export MOLE_DELETE_LOG="$broken_log_dir/deletions.log"
+export HOME="$HOME"
+export MOLE_OPLOG_PATH="$broken_log_dir"
 export MOLE_TEST_TRASH_DIR="$MOLE_TEST_TRASH_DIR"
 export MOLE_TEST_NO_AUTH=1
 source "$PROJECT_ROOT/lib/core/common.sh"
+chmod 0500 "$broken_log_dir"
 mole_delete "$victim"
 # Second call in the same shell must NOT print again.
 : > "$SANDBOX/second_victim"
 mole_delete "$SANDBOX/second_victim"
 EOF
 
-    chmod 0755 "$(dirname "$broken_log_dir")"
+    chmod 0700 "$broken_log_dir"
 
     [ "$status" -eq 0 ]
     # Warning visible exactly once.

@@ -23,6 +23,8 @@ show_history_help() {
 }
 
 main() {
+    local operations_log deletions_log
+
     while [[ $# -gt 0 ]]; do
         case "$1" in
             "--json")
@@ -57,8 +59,14 @@ main() {
         shift
     done
 
-    history_load_operations "$(history_operations_log_file)"
-    history_load_deletions "$(history_deletions_log_file)"
+    if ! operations_log=$(history_operations_log_file) || ! deletions_log=$(history_deletions_log_file); then
+        return 2
+    fi
+    HISTORY_RESOLVED_OPERATIONS_LOG="$operations_log"
+    HISTORY_RESOLVED_DELETIONS_LOG="$deletions_log"
+
+    history_load_operations "$operations_log"
+    history_load_deletions "$deletions_log"
 
     if [[ "$HISTORY_JSON" == "true" ]]; then
         history_render_json "$HISTORY_LIMIT"

@@ -14,6 +14,12 @@ if [[ -z "${MOLE_BASE_LOADED:-}" ]]; then
     source "$_MOLE_CORE_DIR/base.sh"
 fi
 
+if [[ -z "${MOLE_LOG_PATHS_LOADED:-}" ]]; then
+    _MOLE_CORE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    # shellcheck source=lib/core/log_paths.sh
+    source "$_MOLE_CORE_DIR/log_paths.sh"
+fi
+
 readonly MOLE_HISTORY_DEFAULT_LIMIT=20
 readonly MOLE_HISTORY_MAX_LIMIT=200
 
@@ -48,13 +54,23 @@ HISTORY_ACTIVE_FAILED=0
 HISTORY_ACTIVE_REBUILT=0
 HISTORY_ACTIVE_OTHER=0
 HISTORY_ACTIVE_OPERATIONS=0
+HISTORY_RESOLVED_OPERATIONS_LOG=""
+HISTORY_RESOLVED_DELETIONS_LOG=""
 
 history_operations_log_file() {
-    printf '%s\n' "${MOLE_OPERATIONS_LOG:-${OPERATIONS_LOG_FILE:-$HOME/Library/Logs/mole/operations.log}}"
+    if [[ -n "$HISTORY_RESOLVED_OPERATIONS_LOG" ]]; then
+        printf '%s\n' "$HISTORY_RESOLVED_OPERATIONS_LOG"
+        return 0
+    fi
+    mole_operation_log_file "operations.log"
 }
 
 history_deletions_log_file() {
-    printf '%s\n' "${MOLE_DELETE_LOG:-$HOME/Library/Logs/mole/deletions.log}"
+    if [[ -n "$HISTORY_RESOLVED_DELETIONS_LOG" ]]; then
+        printf '%s\n' "$HISTORY_RESOLVED_DELETIONS_LOG"
+        return 0
+    fi
+    mole_operation_log_file "deletions.log"
 }
 
 history_normalize_limit() {

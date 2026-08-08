@@ -262,7 +262,6 @@ setup() {
 	run env HOME="$HOME" TERM="$TERM" bash -euo pipefail -c '
         export MOLE_TEST_MODE=1
         export MOLE_TEST_NO_AUTH=1
-        export MOLE_DELETE_LOG="$HOME/deletions.log"
         source "$1"
 
         INSTALLER_PATHS=("$2" "$3")
@@ -288,7 +287,6 @@ setup() {
 	run env HOME="$HOME" TERM="$TERM" bash -euo pipefail -c '
         export MOLE_TEST_MODE=1
         export MOLE_TEST_NO_AUTH=1
-        export MOLE_DELETE_LOG="$HOME/deletions.log"
         source "$1"
 
         system_size=$(get_file_size "/System")
@@ -406,7 +404,6 @@ setup() {
 	run env HOME="$HOME" TERM="$TERM" bash -euo pipefail -c '
         export MOLE_TEST_MODE=1
         export MOLE_TEST_NO_AUTH=1
-        export MOLE_DELETE_LOG="$HOME/deletions.log"
         source "$1"
         test_removable="$2"
 

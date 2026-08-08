@@ -480,8 +480,8 @@ safe_sudo_remove() {
 #   MOLE_DRY_RUN=1        Log intent, do not delete
 #   MOLE_TEST_TRASH_DIR   Test-only override; Trash moves go here via `mv`
 #                         instead of Finder/trash CLI. Required for bats.
-#   MOLE_DELETE_LOG       Override the log file path (default:
-#                         ~/Library/Logs/mole/deletions.log)
+#   MOLE_OPLOG_PATH       Override the shared operation-log directory. The
+#                         root policy derives deletions.log beneath it.
 #
 # Returns 0 on success, 1 on failure. Always appends a tab-separated line to
 # the deletions log: <iso_ts>\t<mode>\t<size_kb>\t<status>\t<path>.
@@ -779,7 +779,11 @@ _mole_delete_log() {
     local status="$3"
     local target="$4"
 
-    local log_file="${MOLE_DELETE_LOG:-$HOME/Library/Logs/mole/deletions.log}"
+    local log_file
+    if ! log_file=$(mole_operation_log_file "deletions.log"); then
+        _mole_warn_log_broken "invalid operation log root"
+        return 0
+    fi
     local log_dir
     log_dir=$(dirname "$log_file")
 

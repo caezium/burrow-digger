@@ -96,7 +96,7 @@ Review [SECURITY.md](SECURITY.md) and [SECURITY_AUDIT.md](SECURITY_AUDIT.md) for
 ## Tips
 
 - Video tutorial: Watch the [Mole tutorial video](https://www.youtube.com/watch?v=UEe9-w4CcQ0), thanks to PAPAYA 電腦教室.
-- Safety and logs: `clean`, `uninstall`, `purge`, `installer`, and `remove` are destructive. Review with `--dry-run` first, and add `--debug` when needed. File operations are logged to `~/Library/Logs/mole/operations.log` and can be reviewed with `mo history`. Disable with `MO_NO_OPLOG=1`. Review [SECURITY.md](SECURITY.md) and [SECURITY_AUDIT.md](SECURITY_AUDIT.md).
+- Safety and logs: `clean`, `uninstall`, `purge`, `installer`, and `remove` are destructive. Review with `--dry-run` first, and add `--debug` when needed. File operations are logged under `~/Library/Logs/mole` and can be reviewed with `mo history`. `MOLE_OPLOG_PATH` may select one direct child of the canonical `~/Library/Logs` directory for all Mole logs; independent file overrides are rejected. Disable operation logging with `MO_NO_OPLOG=1`. The read-only `scripts/audit_operation_log_roots.sh` command inventories malformed legacy roots without removing them. Review [SECURITY.md](SECURITY.md) and [SECURITY_AUDIT.md](SECURITY_AUDIT.md).
 - App leftovers: use `mo clean` when the app is already uninstalled, and `mo uninstall` when the app is still installed.
 - Navigation: Mole supports arrow keys and Vim bindings `h/j/k/l`.
 

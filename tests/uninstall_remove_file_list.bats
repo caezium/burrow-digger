@@ -12,14 +12,15 @@ setup_file() {
 setup() {
     SANDBOX="$(mktemp -d "${BATS_TEST_DIRNAME}/tmp-uninstall-batch.XXXXXX")"
     export SANDBOX
-    export MOLE_DELETE_LOG="$SANDBOX/deletions.log"
     export MOLE_TEST_TRASH_DIR="$SANDBOX/Trash"
     export MOLE_TEST_NO_AUTH=1
     export MOLE_DELETE_MODE=trash
     unset MOLE_DRY_RUN
     HOME="$SANDBOX/home"
-    mkdir -p "$HOME"
+    mkdir -p "$HOME/Library/Logs"
     export HOME
+    export MOLE_OPLOG_PATH="$HOME/Library/Logs/mole-test"
+    export TEST_DELETE_LOG="$MOLE_OPLOG_PATH/deletions.log"
 }
 
 teardown() {
@@ -29,7 +30,7 @@ teardown() {
 prelude() {
     cat <<EOF
 set -euo pipefail
-export MOLE_DELETE_LOG="$MOLE_DELETE_LOG"
+export MOLE_OPLOG_PATH="$MOLE_OPLOG_PATH"
 export MOLE_TEST_TRASH_DIR="$MOLE_TEST_TRASH_DIR"
 export MOLE_TEST_NO_AUTH=1
 export MOLE_DELETE_MODE=trash
@@ -94,7 +95,7 @@ EOF
 
     # Audit log records one ok line per moved path.
     local ok_lines
-    ok_lines=$(awk -F'\t' '$4 == "ok" && $2 == "trash"' "$MOLE_DELETE_LOG" | wc -l | tr -d ' ')
+    ok_lines=$(awk -F'\t' '$4 == "ok" && $2 == "trash"' "$TEST_DELETE_LOG" | wc -l | tr -d ' ')
     [ "$ok_lines" -eq 5 ]
 }
 

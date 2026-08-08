@@ -17,13 +17,27 @@ if [[ -z "${MOLE_BASE_LOADED:-}" ]]; then
     source "$_MOLE_CORE_DIR/base.sh"
 fi
 
+if [[ -z "${MOLE_LOG_PATHS_LOADED:-}" ]]; then
+    _MOLE_CORE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    # shellcheck source=lib/core/log_paths.sh
+    source "$_MOLE_CORE_DIR/log_paths.sh"
+fi
+
 # ============================================================================
 # Logging Configuration
 # ============================================================================
 
-readonly LOG_FILE="${HOME}/Library/Logs/mole/mole.log"
-readonly DEBUG_LOG_FILE="${HOME}/Library/Logs/mole/mole_debug_session.log"
-readonly OPERATIONS_LOG_FILE="${HOME}/Library/Logs/mole/operations.log"
+OPERATION_LOG_ROOT=""
+if ! OPERATION_LOG_ROOT=$(mole_prepare_operation_log_root); then
+    if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+        return 1
+    fi
+    exit 1
+fi
+readonly OPERATION_LOG_ROOT
+readonly LOG_FILE="$OPERATION_LOG_ROOT/mole.log"
+readonly DEBUG_LOG_FILE="$OPERATION_LOG_ROOT/mole_debug_session.log"
+readonly OPERATIONS_LOG_FILE="$OPERATION_LOG_ROOT/operations.log"
 readonly LOG_MAX_SIZE_DEFAULT=1048576   # 1MB
 readonly OPLOG_MAX_SIZE_DEFAULT=5242880 # 5MB
 
@@ -40,7 +54,15 @@ fi
 append_log_line() {
     local file_path="$1"
     local line="${2:-}"
+    local current_root
 
+    if ! current_root=$(mole_prepare_operation_log_root); then
+        return 0
+    fi
+    [[ "$(dirname "$file_path")" == "$current_root" ]] || {
+        _mole_log_root_error "writer escaped the configured root"
+        return 0
+    }
     ensure_user_file "$file_path"
     printf '%s\n' "$line" >> "$file_path" 2> /dev/null || true
 }
@@ -48,7 +70,15 @@ append_log_line() {
 append_log_lines() {
     local file_path="$1"
     shift
+    local current_root
 
+    if ! current_root=$(mole_prepare_operation_log_root); then
+        return 0
+    fi
+    [[ "$(dirname "$file_path")" == "$current_root" ]] || {
+        _mole_log_root_error "writer escaped the configured root"
+        return 0
+    }
     ensure_user_file "$file_path"
     printf '%s\n' "$@" >> "$file_path" 2> /dev/null || true
 }

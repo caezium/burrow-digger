@@ -212,9 +212,17 @@ a corresponding test that fails before your code lands.
   has no special status. The user is responsible for selecting safe
   cleanup targets; mole only guarantees system integrity.
 - **No telemetry.** We never report what was scanned, deleted, or
-  attempted. Mistakes are diagnosed locally via `~/.cache/mole/`
-  operation logs (path is `MOLE_OPLOG_PATH` overridable;
-  `MO_NO_OPLOG=1` disables entirely).
+  attempted. Mistakes are diagnosed locally via operation logs under
+  `~/Library/Logs/mole`. `MOLE_OPLOG_PATH` can select one direct child of the
+  canonical `~/Library/Logs` directory for every Mole log; relative paths,
+  controls, JSON-shaped names, symlinks, wrong owners, and other volumes are
+  rejected. `MO_NO_OPLOG=1` disables operation logging entirely.
+
+Malformed roots left by an older build can be inventoried with
+`scripts/audit_operation_log_roots.sh`. Its `--null` mode emits three
+NUL-delimited fields per record (`status`, `reason`, and `path`), so newline
+characters in a malformed name cannot split a diagnostic record. The command
+is read-only and never removes or migrates a directory automatically.
 
 ---
 
