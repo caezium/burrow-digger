@@ -112,7 +112,7 @@ EOF
     mkdir -m 0700 "$legacy_root"
 
     run env HOME="$HOME" MOLE_DELETE_LOG="$legacy_root/deletions.log" PROJECT_ROOT="$PROJECT_ROOT" \
-        bash --noprofile --norc -c 'source "$PROJECT_ROOT/lib/core/common.sh"'
+        bash --noprofile --norc -c "source \"$PROJECT_ROOT/lib/core/common.sh\""
     [ "$status" -ne 0 ]
     [[ "$output" == *"MOLE_OPLOG_PATH"* ]]
     [ ! -e "$legacy_root/deletions.log" ]
@@ -172,7 +172,7 @@ EOF
     ln -s "$outside" "$link_root"
 
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" INVENTORY="$inventory" \
-        bash --noprofile --norc -c '"$PROJECT_ROOT/scripts/audit_operation_log_roots.sh" --null > "$INVENTORY"'
+        bash --noprofile --norc -c "\"$PROJECT_ROOT/scripts/audit_operation_log_roots.sh\" --null > \"\$INVENTORY\""
     [ "$status" -eq 0 ]
 
     APPROVED_ROOT="$approved_root" NEWLINE_ROOT="$newline_root" JSON_ROOT="$json_root" \
