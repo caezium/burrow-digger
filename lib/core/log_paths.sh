@@ -253,7 +253,7 @@ mole_operation_log_root() {
 }
 
 mole_operation_log_root_for_read() {
-    local home canonical_home library_dir logs_parent raw_root root_name
+    local home canonical_home library_dir logs_parent raw_root root_name canonical_root
     local expected_uid expected_device existing_dir
 
     _mole_reject_independent_log_overrides || return 1

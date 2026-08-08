@@ -1,5 +1,23 @@
 #!/usr/bin/env bats
 
+cleanup_test_tree() {
+    local target="$1"
+    if [[ "$HOME" != "${BATS_TEST_DIRNAME}/tmp-"* ]] \
+        || [[ "$target" != "$HOME" && "$target" != "$HOME/Library" ]]; then
+        printf 'FATAL: refused test cleanup target: %s\n' "$target" >&2
+        return 1
+    fi
+    (
+        # base.sh supports the system Bash, whose nounset handling for empty
+        # arrays differs from modern Bash. Its audited helper owns recursion.
+        set +u
+        source "$PROJECT_ROOT/lib/core/base.sh"
+        MOLE_TEMP_FILES=()
+        MOLE_TEMP_DIRS=("$target")
+        cleanup_temp_files
+    )
+}
+
 setup_file() {
     PROJECT_ROOT="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
     export PROJECT_ROOT
@@ -13,7 +31,7 @@ setup_file() {
 
 teardown_file() {
     if [[ "$HOME" == "${BATS_TEST_DIRNAME}/tmp-"* ]]; then
-        rm -rf "$HOME"
+        cleanup_test_tree "$HOME"
     fi
     if [[ -n "${ORIGINAL_HOME:-}" ]]; then
         export HOME="$ORIGINAL_HOME"
@@ -25,7 +43,7 @@ setup() {
         printf 'FATAL: HOME is not a test temp dir: %s\n' "$HOME" >&2
         return 1
     fi
-    rm -rf "$HOME/Library"
+    cleanup_test_tree "$HOME/Library"
     mkdir -p "$HOME/Library/Logs"
 }
 
@@ -77,7 +95,7 @@ EOF
 }
 
 @test "logging creates only the canonical default root beneath the invoking home" {
-    rm -rf "$HOME/Library"
+    cleanup_test_tree "$HOME/Library"
 
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
 set -euo pipefail
