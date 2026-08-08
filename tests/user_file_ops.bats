@@ -54,6 +54,18 @@ setup() {
     [ -d "$result" ]
 }
 
+@test "get_invoking_home accepts the explicit home only when it matches the invoking account" {
+    local account_home="$HOME/Invoking User"
+
+    result=$(env HOME="$account_home" SUDO_USER="invoking-user" ACCOUNT_HOME="$account_home" \
+        bash -c "source '$PROJECT_ROOT/lib/core/base.sh'; get_user_home() { printf '%s\n' \"\$ACCOUNT_HOME\"; }; get_invoking_home")
+    [ "$result" = "$account_home" ]
+
+    result=$(env HOME="$HOME/attacker-controlled" SUDO_USER="invoking-user" ACCOUNT_HOME="$account_home" \
+        bash -c "source '$PROJECT_ROOT/lib/core/base.sh'; get_user_home() { printf '%s\n' \"\$ACCOUNT_HOME\"; }; get_invoking_home")
+    [ "$result" = "$account_home" ]
+}
+
 @test "prepare_mole_tmpdir uses writable TMPDIR when available" {
     local writable_tmp="$HOME/custom-tmp"
     mkdir -p "$writable_tmp"
@@ -119,6 +131,15 @@ setup() {
 @test "get_user_home returns empty for invalid user" {
     result=$(bash -c "source '$PROJECT_ROOT/lib/core/base.sh'; get_user_home 'nonexistent_user_12345'")
     [ -z "$result" ] || [ "$result" = "~nonexistent_user_12345" ]
+}
+
+@test "get_user_home preserves spaces in dscl home paths" {
+    result=$(bash -c "
+        source '$PROJECT_ROOT/lib/core/base.sh'
+        dscl() { printf '%s\n' 'NFSHomeDirectory: /Users/Invoking User'; }
+        get_user_home 'invoking-user'
+    ")
+    [ "$result" = "/Users/Invoking User" ]
 }
 
 @test "ensure_user_dir creates simple directory" {

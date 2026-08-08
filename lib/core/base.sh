@@ -301,7 +301,18 @@ get_invoking_gid() {
 
 get_invoking_home() {
     if [[ -n "${SUDO_USER:-}" && "${SUDO_USER:-}" != "root" ]]; then
-        get_user_home "$SUDO_USER"
+        local account_home
+        account_home=$(get_user_home "$SUDO_USER")
+
+        # The privileged helper supplies HOME from a daemon-validated account
+        # record. Accept that explicit value only when the local account lookup
+        # independently agrees; ordinary sudo callers cannot redirect cleanup
+        # by injecting a different HOME.
+        if [[ -n "${HOME:-}" && "$HOME" == "$account_home" ]]; then
+            echo "$HOME"
+        else
+            echo "$account_home"
+        fi
         return 0
     fi
 
@@ -318,7 +329,9 @@ get_user_home() {
     fi
 
     if command -v dscl > /dev/null 2>&1; then
-        home=$(dscl . -read "/Users/$user" NFSHomeDirectory 2> /dev/null | awk '{print $2}' | head -1 || true)
+        home=$(dscl . -read "/Users/$user" NFSHomeDirectory 2> /dev/null \
+            | sed -n 's/^[[:space:]]*NFSHomeDirectory:[[:space:]]*//p' \
+            | head -1 || true)
     fi
 
     if [[ -z "$home" ]]; then

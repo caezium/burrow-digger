@@ -265,3 +265,138 @@ EOF
     [ "$status" -ne 0 ]
     [[ "$output" == *"unexpected volume"* ]]
 }
+
+@test "operation log writers never follow precreated leaf symlinks" {
+    local log_root="$HOME/Library/Logs/mole-test"
+    local outside="$HOME/outside.log"
+    local filename
+    mkdir -m 0700 "$log_root"
+
+    for filename in mole.log operations.log deletions.log mole_debug_session.log; do
+        if [[ -e "$log_root/$filename" || -L "$log_root/$filename" ]]; then
+            unlink "$log_root/$filename"
+        fi
+        printf 'outside-sentinel\n' > "$outside"
+        ln -s "$outside" "$log_root/$filename"
+
+        case "$filename" in
+            mole.log)
+                run env HOME="$HOME" MOLE_OPLOG_PATH="$log_root" PROJECT_ROOT="$PROJECT_ROOT" \
+                    bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+log_info "must stay in the operation log"
+EOF
+                ;;
+            operations.log)
+                run env HOME="$HOME" MOLE_OPLOG_PATH="$log_root" PROJECT_ROOT="$PROJECT_ROOT" \
+                    bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+log_operation "clean" "REMOVED" "/tmp/cache" "2KB"
+EOF
+                ;;
+            deletions.log)
+                run env HOME="$HOME" MOLE_OPLOG_PATH="$log_root" PROJECT_ROOT="$PROJECT_ROOT" \
+                    bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+_mole_delete_log "permanent" "2" "ok" "/tmp/cache"
+EOF
+                ;;
+            mole_debug_session.log)
+                run env HOME="$HOME" MOLE_OPLOG_PATH="$log_root" PROJECT_ROOT="$PROJECT_ROOT" \
+                    MOLE_TEST_NO_AUTH=1 bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+MO_DEBUG=1 log_system_info
+EOF
+                ;;
+        esac
+
+        [ "$status" -eq 0 ]
+        [ -L "$log_root/$filename" ]
+        [ "$(cat "$outside")" = "outside-sentinel" ]
+        [[ "$output" == *"Invalid operation log file"* ]]
+        unlink "$log_root/$filename"
+    done
+}
+
+@test "append rejects a leaf replaced after root validation" {
+    local log_root="$HOME/Library/Logs/mole-test"
+    local outside="$HOME/outside.log"
+    mkdir -m 0700 "$log_root"
+    printf 'outside-sentinel\n' > "$outside"
+
+    run env HOME="$HOME" MOLE_OPLOG_PATH="$log_root" PROJECT_ROOT="$PROJECT_ROOT" \
+        LOG_ROOT="$log_root" OUTSIDE="$outside" bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+mole_operation_log_root_for_read() {
+    unlink "$LOG_ROOT/operations.log"
+    ln -s "$OUTSIDE" "$LOG_ROOT/operations.log"
+    printf '%s\n' "$LOG_ROOT"
+}
+log_operation "clean" "REMOVED" "/tmp/cache" "2KB"
+EOF
+
+    [ "$status" -eq 0 ]
+    [ -L "$log_root/operations.log" ]
+    [ "$(cat "$outside")" = "outside-sentinel" ]
+    [[ "$output" == *"Invalid operation log file"* ]]
+}
+
+@test "descriptor-relative root setup rejects a directory entry swapped after open" {
+    local log_root="$HOME/Library/Logs/mole-race"
+    local outside="$HOME/directory-swap-target"
+    local hook="$HOME/swap-opened-root"
+    local outside_mode
+    mkdir -m 0755 "$outside"
+    outside_mode=$(stat -f '%Lp' "$outside")
+
+    cat > "$hook" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+[[ "$1" == "opened-log-root" ]] || exit 0
+/bin/mv "$2" "$2.opened"
+/bin/ln -s "$OUTSIDE" "$2"
+EOF
+    chmod 0700 "$hook"
+
+    run env HOME="$HOME" MOLE_OPLOG_PATH="$log_root" PROJECT_ROOT="$PROJECT_ROOT" \
+        MOLE_TEST_MODE=1 MOLE_TEST_LOG_IO_HOOK="$hook" OUTSIDE="$outside" \
+        bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/log_paths.sh"
+mole_prepare_operation_log_root
+EOF
+
+    [ "$status" -ne 0 ]
+    [ -L "$log_root" ]
+    [ -d "$log_root.opened" ]
+    [ "$(stat -f '%Lp' "$outside")" = "$outside_mode" ]
+    [ -z "$(find "$outside" -mindepth 1 -print -quit)" ]
+    [[ "$output" == *"directory entry changed while open"* \
+        || "$output" == *"directory entry no longer names opened descriptor"* ]]
+}
+
+@test "compatibility mode exercises the descriptor backend without post-10.14 flags" {
+    local log_root="$HOME/Library/Logs/mole-compat"
+
+    run "$PROJECT_ROOT/lib/core/operation_log_io.pl" backend
+    [ "$status" -eq 0 ]
+    [ "$output" = "openat+mkdirat+O_NOFOLLOW (OS X 10.10+)" ]
+
+    run env HOME="$HOME" MOLE_OPLOG_PATH="$log_root" PROJECT_ROOT="$PROJECT_ROOT" \
+        MOLE_TEST_MODE=1 MOLE_TEST_LOG_IO_COMPAT=1 \
+        bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/log_paths.sh"
+mole_prepare_operation_log_root > /dev/null
+printf 'compatibility-write\n' \
+    | mole_append_operation_log_path "$MOLE_OPLOG_PATH/operations.log"
+EOF
+
+    [ "$status" -eq 0 ]
+    [ "$(cat "$log_root/operations.log")" = "compatibility-write" ]
+}

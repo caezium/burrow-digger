@@ -8,10 +8,12 @@ if [[ -n "${MOLE_LOG_PATHS_LOADED:-}" ]]; then
 fi
 readonly MOLE_LOG_PATHS_LOADED=1
 
+readonly MOLE_LOG_PATHS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly MOLE_OPERATION_LOG_IO_HELPER="$MOLE_LOG_PATHS_DIR/operation_log_io.pl"
+
 if [[ -z "${MOLE_BASE_LOADED:-}" ]]; then
-    _MOLE_CORE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     # shellcheck source=lib/core/base.sh
-    source "$_MOLE_CORE_DIR/base.sh"
+    source "$MOLE_LOG_PATHS_DIR/base.sh"
 fi
 
 readonly MOLE_OPLOG_DIRECTORY_NAME="mole"
@@ -42,6 +44,14 @@ _mole_log_stat_device() {
     /usr/bin/stat -f '%d' "$1" 2> /dev/null
 }
 
+_mole_operation_log_io() {
+    [[ -f "$MOLE_OPERATION_LOG_IO_HELPER" ]] || {
+        _mole_log_root_error "descriptor helper is unavailable"
+        return 1
+    }
+    /usr/bin/perl "$MOLE_OPERATION_LOG_IO_HELPER" "$@"
+}
+
 _mole_validate_owned_log_dir() {
     local path="$1"
     local expected_uid="$2"
@@ -68,29 +78,6 @@ _mole_validate_owned_log_dir() {
         _mole_log_root_error "unexpected volume: $path"
         return 1
     }
-}
-
-_mole_create_owned_log_dir() {
-    local path="$1"
-    local expected_uid="$2"
-    local expected_gid="$3"
-    local expected_device="$4"
-
-    if [[ -e "$path" || -L "$path" ]]; then
-        _mole_validate_owned_log_dir "$path" "$expected_uid" "$expected_device"
-        return $?
-    fi
-
-    if ! mkdir -m 0700 "$path" 2> /dev/null; then
-        _mole_log_root_error "cannot create approved directory: $path"
-        return 1
-    fi
-    if [[ "$(id -u)" == "0" ]] && ! chown "$expected_uid:$expected_gid" "$path" 2> /dev/null; then
-        rmdir "$path" 2> /dev/null || true
-        _mole_log_root_error "cannot assign invoking-user ownership: $path"
-        return 1
-    fi
-    _mole_validate_owned_log_dir "$path" "$expected_uid" "$expected_device"
 }
 
 mole_prepare_operation_log_root() {
@@ -131,9 +118,6 @@ mole_prepare_operation_log_root() {
 
     library_dir="$canonical_home/Library"
     logs_parent="$library_dir/Logs"
-    _mole_create_owned_log_dir "$library_dir" "$expected_uid" "$expected_gid" "$expected_device" || return 1
-    _mole_create_owned_log_dir "$logs_parent" "$expected_uid" "$expected_gid" "$expected_device" || return 1
-
     raw_root="${MOLE_OPLOG_PATH:-$logs_parent/$MOLE_OPLOG_DIRECTORY_NAME}"
     [[ -n "$raw_root" && "$raw_root" == /* ]] || {
         _mole_log_root_error "override must be absolute"
@@ -161,8 +145,9 @@ mole_prepare_operation_log_root() {
         return 1
     }
 
-    _mole_create_owned_log_dir "$raw_root" "$expected_uid" "$expected_gid" "$expected_device" || return 1
-    mole_operation_log_root
+    _mole_operation_log_io \
+        prepare "$canonical_home" "$root_name" \
+        "$expected_uid" "$expected_gid" "$expected_device"
 }
 
 mole_operation_log_root() {
@@ -326,4 +311,65 @@ mole_operation_log_file() {
 
     root=$(mole_operation_log_root_for_read) || return 1
     printf '%s/%s\n' "$root" "$filename"
+}
+
+# Open operation logs relative to a verified directory descriptor. Shell
+# redirection cannot express O_NOFOLLOW and introduces a check/open race; the
+# helper walks from `/` with openat(O_NOFOLLOW), creates with mkdirat, changes
+# ownership through fchown, and writes only through the resulting descriptors.
+# Those primitives are available on every supported macOS release.
+_mole_write_operation_log_path() {
+    local file_path="$1"
+    local write_mode="${2:-append}"
+    local current_root filename home root_name
+    local expected_uid expected_gid expected_device
+
+    case "$write_mode" in
+        append | ensure | truncate) ;;
+        *)
+            _mole_log_root_error "unsupported log write mode: $write_mode"
+            return 1
+            ;;
+    esac
+
+    current_root=$(mole_operation_log_root_for_read) || return 1
+    filename=${file_path##*/}
+    case "$filename" in
+        operations.log | deletions.log | mole.log | mole_debug_session.log) ;;
+        *)
+            _mole_log_root_error "unsupported log filename: $filename"
+            return 1
+            ;;
+    esac
+    [[ "$file_path" == "$current_root/$filename" ]] || {
+        _mole_log_root_error "writer escaped the configured root"
+        return 1
+    }
+
+    home=$(get_invoking_home)
+    root_name=${current_root##*/}
+    expected_uid=$(get_invoking_uid)
+    expected_gid=$(get_invoking_gid)
+    expected_device=$(_mole_log_stat_device "$home") || return 1
+    [[ "$expected_uid" =~ ^[0-9]+$ && "$expected_gid" =~ ^[0-9]+$ \
+        && "$expected_device" =~ ^[0-9]+$ ]] || {
+        _mole_log_root_error "invoking identity is unavailable"
+        return 1
+    }
+
+    _mole_operation_log_io \
+        "$write_mode" "$home" "$root_name" "$filename" \
+        "$expected_uid" "$expected_gid" "$expected_device"
+}
+
+mole_ensure_operation_log_path() {
+    _mole_write_operation_log_path "$1" ensure < /dev/null
+}
+
+mole_append_operation_log_path() {
+    _mole_write_operation_log_path "$1" append
+}
+
+mole_replace_operation_log_path() {
+    _mole_write_operation_log_path "$1" truncate
 }

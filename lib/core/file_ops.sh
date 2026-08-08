@@ -784,24 +784,13 @@ _mole_delete_log() {
         _mole_warn_log_broken "invalid operation log root"
         return 0
     fi
-    local log_dir
-    log_dir=$(dirname "$log_file")
-
-    # Surface log-write failures once per session. The deletions log is the
-    # only audit trail for Trash-routed removals; silently no-oping when the
-    # log dir is unwritable (root-owned from prior sudo, ENOSPC, read-only
-    # volume) defeats the design.
-    if ! mkdir -p "$log_dir" 2> /dev/null; then
-        _mole_warn_log_broken "create directory: $log_dir"
-        return 0
-    fi
 
     local ts
     ts=$(date '+%Y-%m-%dT%H:%M:%S%z' 2> /dev/null || echo "unknown")
 
     if ! printf '%s\t%s\t%s\t%s\t%s\n' \
         "$ts" "$mode" "$size_kb" "$status" "$target" \
-        >> "$log_file" 2> /dev/null; then
+        | mole_append_operation_log_path "$log_file"; then
         _mole_warn_log_broken "write to: $log_file"
     fi
 }

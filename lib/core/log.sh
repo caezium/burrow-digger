@@ -41,10 +41,11 @@ readonly OPERATIONS_LOG_FILE="$OPERATION_LOG_ROOT/operations.log"
 readonly LOG_MAX_SIZE_DEFAULT=1048576   # 1MB
 readonly OPLOG_MAX_SIZE_DEFAULT=5242880 # 5MB
 
-# Ensure log directory and file exist with correct ownership
-ensure_user_file "$LOG_FILE"
+# Ensure log files exist through the same descriptor-bound path used by every
+# append. A precreated leaf symlink remains untouched and is never followed.
+mole_ensure_operation_log_path "$LOG_FILE" || true
 if [[ "${MO_NO_OPLOG:-}" != "1" ]]; then
-    ensure_user_file "$OPERATIONS_LOG_FILE"
+    mole_ensure_operation_log_path "$OPERATIONS_LOG_FILE" || true
 fi
 
 # ============================================================================
@@ -54,33 +55,15 @@ fi
 append_log_line() {
     local file_path="$1"
     local line="${2:-}"
-    local current_root
 
-    if ! current_root=$(mole_prepare_operation_log_root); then
-        return 0
-    fi
-    [[ "$(dirname "$file_path")" == "$current_root" ]] || {
-        _mole_log_root_error "writer escaped the configured root"
-        return 0
-    }
-    ensure_user_file "$file_path"
-    printf '%s\n' "$line" >> "$file_path" 2> /dev/null || true
+    printf '%s\n' "$line" | mole_append_operation_log_path "$file_path" || true
 }
 
 append_log_lines() {
     local file_path="$1"
     shift
-    local current_root
 
-    if ! current_root=$(mole_prepare_operation_log_root); then
-        return 0
-    fi
-    [[ "$(dirname "$file_path")" == "$current_root" ]] || {
-        _mole_log_root_error "writer escaped the configured root"
-        return 0
-    }
-    ensure_user_file "$file_path"
-    printf '%s\n' "$@" >> "$file_path" 2> /dev/null || true
+    printf '%s\n' "$@" | mole_append_operation_log_path "$file_path" || true
 }
 
 # Rotate log file if it exceeds maximum size
@@ -95,7 +78,7 @@ rotate_log_once() {
         size=$(get_file_size "$LOG_FILE")
         if [[ "$size" -gt "$max_size" ]]; then
             mv "$LOG_FILE" "${LOG_FILE}.old" 2> /dev/null || true
-            ensure_user_file "$LOG_FILE"
+            mole_ensure_operation_log_path "$LOG_FILE" || true
         fi
     fi
 
@@ -107,7 +90,7 @@ rotate_log_once() {
             size=$(get_file_size "$OPERATIONS_LOG_FILE")
             if [[ "$size" -gt "$oplog_max_size" ]]; then
                 mv "$OPERATIONS_LOG_FILE" "${OPERATIONS_LOG_FILE}.old" 2> /dev/null || true
-                ensure_user_file "$OPERATIONS_LOG_FILE"
+                mole_ensure_operation_log_path "$OPERATIONS_LOG_FILE" || true
             fi
         fi
     fi
@@ -352,7 +335,7 @@ debug_risk_level() {
         echo -e "${GRAY}[DEBUG] Risk Level: ${color}${risk_level}${GRAY}, $reason${NC}" >&2
 
         # Also log to file
-        echo "Risk Level: $risk_level, $reason" >> "$DEBUG_LOG_FILE" 2> /dev/null || true
+        append_log_line "$DEBUG_LOG_FILE" "Risk Level: $risk_level, $reason"
     fi
 }
 
@@ -362,14 +345,9 @@ log_system_info() {
     [[ -n "${MOLE_SYS_INFO_LOGGED:-}" ]] && return 0
     export MOLE_SYS_INFO_LOGGED=1
 
-    # Reset debug log file for this new session
-    ensure_user_file "$DEBUG_LOG_FILE"
-    if ! : > "$DEBUG_LOG_FILE" 2> /dev/null; then
-        echo -e "${YELLOW}${ICON_WARNING}${NC} Debug log not writable: $DEBUG_LOG_FILE" >&2
-    fi
-
-    # Start block in debug log file
-    {
+    # Replace the debug session through the descriptor-bound writer so a leaf
+    # swap cannot redirect either the truncation or the subsequent block.
+    if ! {
         echo "----------------------------------------------------------------------"
         echo "Mole Debug Session, $(date '+%Y-%m-%d %H:%M:%S')"
         echo "----------------------------------------------------------------------"
@@ -391,7 +369,9 @@ log_system_info() {
             echo "Sudo Access: Required"
         fi
         echo "----------------------------------------------------------------------"
-    } >> "$DEBUG_LOG_FILE" 2> /dev/null || true
+    } | mole_replace_operation_log_path "$DEBUG_LOG_FILE"; then
+        echo -e "${YELLOW}${ICON_WARNING}${NC} Debug log not writable: $DEBUG_LOG_FILE" >&2
+    fi
 
     # Notification to stderr
     echo -e "${GRAY}[DEBUG] Debug logging enabled. Session log: $DEBUG_LOG_FILE${NC}" >&2
