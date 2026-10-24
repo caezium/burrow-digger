@@ -367,6 +367,55 @@ PLIST
     [ "$output" -eq 1 ]
 }
 
+@test "mo clean --dry-run exports eligible siblings without widening to their parent" {
+    local cache_root="$HOME/Library/Caches"
+    local name
+    for name in CandidateA "Candidate B" ms-playwright WhitelistedApp; do
+        mkdir -p "$cache_root/$name"
+        dd if=/dev/zero of="$cache_root/$name/data.bin" bs=1024 count=8 2> /dev/null
+    done
+    printf '%s\n' "$cache_root/WhitelistedApp" > "$HOME/.config/mole/whitelist"
+
+    run bash --noprofile --norc -c '
+        source "$PROJECT_ROOT/bin/clean.sh"
+        DRY_RUN=true
+        safe_clean "$HOME"/Library/Caches/* "User app cache"
+    '
+    [ "$status" -eq 0 ]
+
+    local export_file="$HOME/.config/mole/clean-list.txt"
+    run grep -F "$cache_root/CandidateA  # " "$export_file"
+    [ "$status" -eq 0 ]
+    run grep -F "$cache_root/Candidate B  # " "$export_file"
+    [ "$status" -eq 0 ]
+    run grep -F "$cache_root  # " "$export_file"
+    [ "$status" -eq 1 ]
+    run grep -F "$cache_root/ms-playwright" "$export_file"
+    [ "$status" -eq 1 ]
+    run grep -F "$cache_root/WhitelistedApp" "$export_file"
+    [ "$status" -eq 1 ]
+    for name in CandidateA "Candidate B" ms-playwright WhitelistedApp; do
+        [ -f "$cache_root/$name/data.bin" ] || return 1
+    done
+}
+
+@test "mo clean --dry-run preserves a literal pipe in a single exported target" {
+    local cache_path="$HOME/Library/Caches/Cache | with spaces"
+    mkdir -p "$cache_path"
+    dd if=/dev/zero of="$cache_path/data.bin" bs=1024 count=8 2> /dev/null
+
+    run bash --noprofile --norc -c '
+        source "$PROJECT_ROOT/bin/clean.sh"
+        DRY_RUN=true
+        safe_clean "$HOME"/Library/Caches/* "User app cache"
+    '
+    [ "$status" -eq 0 ]
+
+    run grep -F "$cache_path  # " "$HOME/.config/mole/clean-list.txt"
+    [ "$status" -eq 0 ]
+    [ -f "$cache_path/data.bin" ]
+}
+
 @test "mo clean honors whitelist entries" {
     mkdir -p "$HOME/Library/Caches/WhitelistedApp"
     echo "keep me" > "$HOME/Library/Caches/WhitelistedApp/data.tmp"

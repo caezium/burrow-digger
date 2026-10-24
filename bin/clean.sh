@@ -897,9 +897,7 @@ safe_clean() {
             size_display=$(colorize_human_size "$size_human")
             echo -e "  ${YELLOW}${ICON_DRY_RUN}${NC} $label${NC}, ${size_display} ${YELLOW}dry${NC}"
 
-            local paths_temp
-            paths_temp=$(create_temp_file)
-
+            # Keep individual targets: grouping by parent can reintroduce excluded siblings.
             idx=0
             if [[ ${#existing_paths[@]} -gt 0 ]]; then
                 for path in "${existing_paths[@]}"; do
@@ -916,42 +914,10 @@ safe_clean() {
                         continue
                     }
 
-                    echo "$(dirname "$path")|$size|$path" >> "$paths_temp"
+                    local path_size_human
+                    path_size_human=$(bytes_to_human "$((size * 1024))")
+                    printf '%s  # %s\n' "$path" "$path_size_human" >> "$EXPORT_LIST_FILE"
                     idx=$((idx + 1))
-                done
-            fi
-
-            # Group dry-run paths by parent for a compact export list.
-            if [[ -f "$paths_temp" && -s "$paths_temp" ]]; then
-                sort -t'|' -k1,1 "$paths_temp" | awk -F'|' '
-                {
-                    parent = $1
-                    size = $2
-                    path = $3
-
-                    parent_size[parent] += size
-                    if (parent_count[parent] == 0) {
-                        parent_first[parent] = path
-                    }
-                    parent_count[parent]++
-                }
-                END {
-                    for (parent in parent_size) {
-                        if (parent_count[parent] > 1) {
-                            printf "%s|%d|%d\n", parent, parent_size[parent], parent_count[parent]
-                        } else {
-                            printf "%s|%d|1\n", parent_first[parent], parent_size[parent]
-                        }
-                    }
-                }
-                ' | while IFS='|' read -r display_path total_size child_count; do
-                    local size_human
-                    size_human=$(bytes_to_human "$((total_size * 1024))")
-                    if [[ $child_count -gt 1 ]]; then
-                        echo "$display_path  # $size_human, $child_count items" >> "$EXPORT_LIST_FILE"
-                    else
-                        echo "$display_path  # $size_human" >> "$EXPORT_LIST_FILE"
-                    fi
                 done
             fi
         else
